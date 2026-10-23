@@ -229,8 +229,10 @@ app.post('/api/bom/versions/:version/activate', wrap(async (req) => {
   return col('products').findOne({ _id: p._id });
 }));
 
-const port = process.env.PORT || 5000;
-app.listen(port, () => console.log(`API listening on http://localhost:${port}`));
+if (!process.env.VERCEL) {
+  const port = process.env.PORT || 5000;
+  app.listen(port, () => console.log(`API listening on http://localhost:${port}`));
+}
 
 try {
   await connect();
@@ -243,3 +245,5 @@ try {
   console.error('MongoDB connection failed:', err.message);
   console.error('Set MONGODB_URI in server/.env and restart.');
 }
+
+export default app;
