@@ -11,9 +11,34 @@ const col = (name) => getDb().collection(name);
 // natural (insertion) order unless a sort is given
 const all = (name, sort) => col(name).find().sort(sort || { $natural: 1 }).toArray();
 const one = (name) => col(name).findOne();
+
+// connect on demand and retry on later requests if the first attempt failed (serverless cold starts)
+let connecting;
+let lastError = '';
+async function ensureDb() {
+  if (getDb()) return true;
+  connecting ||= (async () => {
+    try {
+      await connect();
+      lastError = '';
+      if (process.env.SEED_ON_START !== 'false') {
+        const n = await seed();
+        if (n) console.log(`Seeded ${n} mock documents`);
+      }
+    } catch (err) {
+      lastError = err.message;
+      console.error('MongoDB connection failed:', err.message);
+    } finally {
+      connecting = null;
+    }
+  })();
+  await connecting;
+  return Boolean(getDb());
+}
+
 const wrap = (fn) => async (req, res) => {
   try {
-    if (!getDb()) return res.status(503).json({ error: 'Database not connected. Check MONGODB_URI in server/.env' });
+    if (!(await ensureDb())) return res.status(503).json({ error: `Database not connected: ${lastError || 'check MONGODB_URI'}` });
     res.json(await fn(req));
   } catch (err) {
     console.error(err);
@@ -21,7 +46,7 @@ const wrap = (fn) => async (req, res) => {
   }
 };
 
-app.get('/api/health', (_req, res) => res.json({ ok: true, db: Boolean(getDb()) }));
+app.get('/api/health', async (_req, res) => res.json({ ok: true, db: await ensureDb(), error: lastError || undefined }));
 
 app.get('/api/me', wrap(() => one('users')));
 
@@ -234,16 +259,6 @@ if (!process.env.VERCEL) {
   app.listen(port, () => console.log(`API listening on http://localhost:${port}`));
 }
 
-try {
-  await connect();
-  console.log('MongoDB connected');
-  if (process.env.SEED_ON_START !== 'false') {
-    const n = await seed();
-    if (n) console.log(`Seeded ${n} mock documents`);
-  }
-} catch (err) {
-  console.error('MongoDB connection failed:', err.message);
-  console.error('Set MONGODB_URI in server/.env and restart.');
-}
+if (!process.env.VERCEL) await ensureDb();
 
 export default app;
